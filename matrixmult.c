@@ -10,77 +10,12 @@ Contents: The contents are the requirements for the Assignment 3, write a C
 program to perform the multiplication of two matrices of integers using MPI.
 */
 
-//Notes, introduce stop points in matrix function to greatly reduce time.
-
-#define _BSD_SOURCE
-#include <unistd.h>
-
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
 #include <string.h>
-
-/**
- * mm - This function works with the original core to preserve matrix A
- * @param {INT} n - original n
- * @param {INT} a_stop - stop position for matrix A
- * @param {INT} form - loop order
- * @param {INT} a_a - portion of matrix A
- * @param {INT} a_b - portion of matrix B
- * @param {INT} a_c - matrix C
- */
-void mm(int n, int a_stop, int form, int *a_a, int *a_b, int *a_c) {
-  int x = 0, y = 0, z = 0;
-  /*Note, the order of the indexes in array B will be reversed because the array
-   has been transposed and the rows and columns are switched. */
-  switch (form) {//C[ij] = A[ik]*B[kj]
-   case 0: {//ijk
-     for (int i = 0; i < a_stop; i++) {
-       for (int j = 0; j < n; j++) {
-         for (int k = 0; k < n; k++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   case 1: {//ikj
-     for (int i = 0; i < a_stop; i++) {
-       for (int k = 0; k < n; k++) {
-         for (int j = 0; j < n; j++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   case 2: {//jik
-     for (int j = 0; j < n; j++) {
-       for (int i = 0; i < a_stop; i++) {
-         for (int k = 0; k < n; k++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   case 3: {//jki
-     for (int j = 0; j < n; j++) {
-       for (int k = 0; k < n; k++) {
-         for (int i = 0; i < a_stop; i++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   case 4: {//kij
-     for (int k = 0; k < n; k++) {
-       for (int i = 0; i < a_stop; i++) {
-         for (int j = 0; j < n; j++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   case 5: {//kji
-     for (int k = 0; k < n; k++) {
-       for (int j = 0; j < n; j++) {
-         for (int i = 0; i < a_stop; i++) {
-           x= *(a_a + i*n + k); y= *(a_b + j*n + k); z= *(a_c + i*n + j);
-           *(a_c + i*n + j) = x * y + z;}}}
-     break;}
-   default: {break;}
-  }
-}
 
 /**
  * mma - This function works with a partial portion of Matrix A
@@ -191,7 +126,7 @@ int order(char a, char b, char c) {
 int main() {
   char ch, a, b, c, type;
   int m_rank, c_sz, n, x, tmp=0, form=0, rows, p_rows;
-  int *arr_a=NULL, *arr_b=NULL, *arr_c=NULL, *a_start=NULL, *arows=NULL;
+  int *arr_a=NULL, *arr_b=NULL, *arr_c=NULL;
   int init_array[4];
   double start, end;
 
@@ -214,6 +149,7 @@ int main() {
     }
     scanf("%i", &n);
     ch = getchar();
+
     char r = 'R';                                 //Comparison character
     init_array[0] = n;                            //Side length
     init_array[1] = split(n, c_sz);               //Even split
@@ -266,7 +202,7 @@ int main() {
   //If there's only a single processor run multiplication, collect timing, print
   //information, delete arrays and call MPI finalize.
   if (c_sz == 1) {
-    mm(n, n, form, arr_a, arr_b, arr_c);
+    mma(n, n, 0, form, arr_a, arr_b, arr_c);
     MPI_Barrier (MPI_COMM_WORLD);
     end = MPI_Wtime();
     double total_time = end - start;
@@ -301,40 +237,25 @@ int main() {
     if (m_rank) {
       n = init_array[0];
       form = init_array[3];
-      //If n can be split evenly then the work can be distributed evenly.
-      if (init_array[1] == 0) {rows = n/c_sz;}
-      else {
-        // If there is an uneven split, either some processors get zero work, in
-        // the case where n<c_sz, or some receive extra, which means that those
-        // with rank < n%c_sz get an extra row, and this creates the best split
-        // possible given the number of processors and the size of the matrix.
-        if (n > c_sz) {
-          // If n is larger than the comm size, ex. n=3 and c_sz=2
-          rows = n/c_sz;
-          if (m_rank < (n%c_sz)) {rows++;}
-        }
+      p_rows = 0;
+      if (n%c_sz) {
+        if (n/c_sz) {
+          if (m_rank > (n%c_sz)) {
+            p_rows = (n%c_sz) + (n/c_sz)*m_rank;
+            rows = n/c_sz;}
+          else {
+            p_rows = m_rank + (n/c_sz)*m_rank;
+            rows = (n/c_sz) + 1;}}
         else {
-          // IF n < c_sz, determine if this process receives work.
-          // EX: n = 2 | c_sz = 3 | m_rank = 1
-          // Rank 1 receives work.
-          // EX: n = 2 | c_sz = 3 | m_rank = 2
-          // Rank 2 receives no work.
           if (m_rank < n) {
-            rows = 1;
-          }
-          else {rows = 0;} // This case needs a flag to prevent faulty MPI error
-        }
-      }
+            p_rows = m_rank;
+            rows = 1;}
+          else {p_rows = 0;rows = 0;}}}
+      else {p_rows = (n/c_sz)*m_rank;rows = n/c_sz;}
       while ((!arr_a)||(!arr_b)||(!arr_c)) {
-        if (!arr_a) {
-          arr_a = malloc(sizeof *arr_a * n * n);//The initial matrix to hold A
-        }
-        if (!arr_b) {
-          arr_b = malloc(sizeof *arr_b * n * n);//The initial matrix to hold B
-        }
-        if (!arr_c) {
-          arr_c = malloc(sizeof *arr_c * n * n);//The initial matrix to hold C
-        }
+        if (!arr_a) {arr_a = malloc(sizeof *arr_a * n * n);}
+        if (!arr_b) {arr_b = malloc(sizeof *arr_b * n * n);}
+        if (!arr_c) {arr_c = malloc(sizeof *arr_c * n * n);}
       }
       int array_size = n * n;
       for (int i = 0; i < array_size; i++) {
@@ -349,72 +270,87 @@ int main() {
     //Consider MPI_Bcast for arr_b
     MPI_Bcast(arr_b, n*n, MPI_INT, 0, MPI_COMM_WORLD);
     if (m_rank) {
-      p_rows = 0;
-      //First determine just how many rows will be received.
-      if (m_rank > n) {rows = 0;} //If there's less rows than there are processors.
-      else {
-        //Spit rows evenly by processors.
-        rows = n/c_sz;
-        p_rows = m_rank * rows;
-        //If the split isn't even.
-        if (init_array[1] != 0) {
-          //Then the lower rank processors get work first.
-          if (m_rank < init_array[2]) {rows++; p_rows = p_rows + m_rank;}
-          else {p_rows = p_rows + init_array[2];}
-        }
-      }
+      //p_rows is the number of previous rows that are accounted for.
+      //It takes n/c_sz and if there is a remaineder, it should add
+      //it's m_rank value UNLESS the m_rank is greater than the remainder value
       x = rows;
       MPI_Recv(arr_a + p_rows*n, x*n, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
       if (rows > 0) {
         int received = 1;
         MPI_Send(&received, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-        mma(n, rows, p_rows, form, arr_a, arr_b, arr_c);
+        mma(n, rows+p_rows, p_rows, form, arr_a, arr_b, arr_c);
       }
     }
     else {
-      int index = (n/c_sz) + (init_array[1] != 0);
-      int *arr_start;
-      a_start = malloc (sizeof *a_start * c_sz);
-      arows = malloc (sizeof *arows * c_sz);
-      *(a_start) = 0;
       int wait_count = 0;
       for (int i = 1; i < c_sz; i++) {
-        if (init_array[1] == 0) {rows = n/c_sz;}
-        else {
-          //This accounts for cases where c_sz > n.
-          rows = (n/c_sz) + (i<init_array[2]);
-        }
-        arr_start = arr_a + index*n;
-        *(a_start + i) = *arr_start;
-        x = rows;
-        *(arows + i) = x;
-        index += x;
-        MPI_Send(arr_start, x*n, MPI_INT, i, 0, MPI_COMM_WORLD);
-        int received = 0;
-        MPI_Recv(&received, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        while (!received) {
-          wait_count = wait_count + 1;
-          if (wait_count > 2147483646) {
-            printf("Waiting on process %d to confirm received\n", i);
-            wait_count = 0;
+        p_rows = 0;
+        if (n%c_sz) {
+          if (n/c_sz) {
+            if (i > (n%c_sz)) {p_rows = (n%c_sz) + (n/c_sz)*i; rows = n/c_sz;}
+            else {p_rows = i + (n/c_sz)*i; rows = (n/c_sz) + 1;}
+          }
+          else {
+            if (i < n) {p_rows = i; rows = 1;}
+            else {p_rows = 0; rows = 0;}
           }
         }
-        wait_count = 0;
+        else {p_rows = (n/c_sz)*i; rows = n/c_sz;}
+        MPI_Send(arr_a + p_rows*n, rows*n, MPI_INT, i, 0, MPI_COMM_WORLD);
+        int received = 0;
+        if (rows) {
+          MPI_Recv(&received, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+          while (!received) {
+            wait_count = wait_count + 1;
+            if (wait_count > 2147483646) {
+              printf("Waiting on process %d to confirm received\n", i);
+              wait_count = 0;
+            }
+          }
+          wait_count = 0;
+        }
       }
       //Now set the remaining that rank 0 will cover.
-      if (init_array[1] == 0) {rows = n/c_sz;}
-      else {rows = (n/c_sz) + 1;} //This accounts for cases where c_sz > n.
-
-      if (rows > 0) {mm(n, rows, form, arr_a, arr_b, arr_c);}
+      if (n%c_sz) {
+        if (n/c_sz) {
+          if (m_rank > (n%c_sz)) {rows = n/c_sz;}
+          else {rows = (n/c_sz) + 1;}
+        }
+        else {
+          if (m_rank < n) {rows = 1;}
+          else {rows = 0;}
+        }
+      }
+      else {rows = n/c_sz;}
+      if (rows) {mma(n, rows, 0, form, arr_a, arr_b, arr_c);}
     }
     MPI_Barrier (MPI_COMM_WORLD);
     if (m_rank != 0) {
-      MPI_Send(arr_c + p_rows*n, x*n, MPI_INT, 0, 0, MPI_COMM_WORLD);
+      if (rows) {
+        MPI_Send(arr_c + p_rows*n, x*n, MPI_INT, 0, 0, MPI_COMM_WORLD);
+      }
     }
     else {
       for (int p = 1; p < c_sz; p++) {
-        MPI_Recv(arr_c + *(a_start + p)*n, *(arows + p)*n, MPI_INT, p, 0,
-          MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        p_rows = 0;
+        if (n%c_sz) {
+          if (n/c_sz) {
+            if (p > (n%c_sz)) {
+              p_rows = (n%c_sz) + (n/c_sz)*p;
+              rows = n/c_sz;}
+            else {
+              p_rows = p + (n/c_sz)*p;
+              rows = (n/c_sz) + 1;}}
+          else {
+            if (p < n) {
+              p_rows = p;
+              rows = 1;}
+            else {p_rows = 0;rows = 0;}}}
+        else {p_rows = (n/c_sz)*p;rows = n/c_sz;}
+        if (rows) {
+          MPI_Recv((arr_c + p_rows*n), rows*n, MPI_INT, p, 0,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
       }
     }
     //At this point each process that isn't zero has completed its work.
@@ -443,8 +379,6 @@ int main() {
     if (arr_a) {free(arr_a);}
     if (arr_b) {free(arr_b);}
     if (arr_c) {free(arr_c);}
-    if (a_start) {free(a_start);}
-    if (arows) {free(arows);}
     MPI_Barrier (MPI_COMM_WORLD);
     if (!m_rank) {MPI_Finalize();}
     return 0;
